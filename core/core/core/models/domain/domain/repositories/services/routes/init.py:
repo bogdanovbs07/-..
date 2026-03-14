@@ -1,0 +1,118 @@
+from routes.image_routes import router as image_router
+from routes.user_routes import router as user_router
+from routes.auth_routes import router as auth_router
+
+__all__ = ["image_router", "user_router", "auth_router"]
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from sqlalchemy.orm import Session
+from typing import List
+from core.database import get_db
+from repositories.image_repository import ImageRepository
+from services.image_service import ImageService
+from domain.schemas import ImageCreate, ImageResponse
+
+router = APIRouter(prefix="/images", tags=["images"])
+
+def get_image_service(db: Session = Depends(get_db)):
+    image_repository = ImageRepository(db)
+    return ImageService(image_repository)
+
+@router.post("/", response_model=ImageResponse)
+async def upload_image(
+    file: UploadFile = File(...),
+    description: str = Form(None),
+    user_id: int = Form(None),
+    service: ImageService = Depends(get_image_service)
+):
+    image_data = ImageCreate(filename=file.filename, description=description, user_id=user_id)
+    result = service.create_image(image_data, file)
+    if not result:
+        raise HTTPException(status_code=400, detail="Could not upload image")
+    return result
+
+@router.get("/", response_model=List[ImageResponse])
+def get_all_images(service: ImageService = Depends(get_image_service)):
+    return service.get_all_images()
+
+@router.get("/{image_id}", response_model=ImageResponse)
+def get_image(image_id: int, service: ImageService = Depends(get_image_service)):
+    """Получение изображения по ID"""
+    result = service.get_image(image_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return result
+
+@router.put("/{image_id}/description")
+def update_description(
+    image_id: int, 
+    description: str,
+    service: ImageService = Depends(get_image_service)
+):
+    result = service.update_description(image_id, description)
+    if not result:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return result
+
+@router.delete("/{image_id}")
+def delete_image(image_id: int, service: ImageService = Depends(get_image_service)):
+    result = service.delete_image(image_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return {"message": "Image deleted successfully"}
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import List
+from core.database import get_db
+from repositories.user_repository import UserRepository
+from services.user_service import UserService
+from domain.schemas import UserCreate, UserResponse
+
+router = APIRouter(prefix="/users", tags=["users"])
+
+def get_user_service(db: Session = Depends(get_db)):
+    user_repository = UserRepository(db)
+    return UserService(user_repository)
+
+@router.post("/", response_model=UserResponse)
+def create_user(user_data: UserCreate, service: UserService = Depends(get_user_service)):
+    result = service.create_user(user_data)
+    if not result:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    return result
+
+@router.get("/", response_model=List[UserResponse])
+def get_all_users(service: UserService = Depends(get_user_service)):
+    return service.get_all_users()
+
+@router.get("/{user_id}", response_model=UserResponse)
+def get_user(user_id: int, service: UserService = Depends(get_user_service)):
+    result = service.get_user(user_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="User not found")
+    return result
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from core.database import get_db
+from repositories.user_repository import UserRepository
+from services.user_service import UserService
+from services.auth_service import AuthService
+from domain.schemas import UserLogin, Token
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+def get_auth_service(db: Session = Depends(get_db)):
+    user_repository = UserRepository(db)
+    user_service = UserService(user_repository)
+    return AuthService(user_service)
+
+@router.post("/login", response_model=Token)
+def login(login_data: UserLogin, service: AuthService = Depends(get_auth_service)):
+    user = service.authenticate_user(login_data)
+    if not user:
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    
+    access_token = service.create_access_token(data={"sub": user["username"]})
+    return {"access_token": access_token, "token_type": "bearer"}
