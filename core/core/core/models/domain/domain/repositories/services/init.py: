@@ -1,0 +1,186 @@
+from services.image_service import ImageService
+from services.user_service import UserService
+from services.auth_service import AuthService
+
+__all__ = ["ImageService", "UserService", "AuthService"]
+
+from repositories.image_repository import ImageRepository
+from domain.schemas import ImageCreate
+from typing import List, Optional
+import os
+import shutil
+from datetime import datetime
+
+class ImageService:
+    def __init__(self, image_repository: ImageRepository):
+        self.image_repository = image_repository
+        self.upload_dir = "uploads"
+        os.makedirs(self.upload_dir, exist_ok=True)
+    
+    def create_image(self, image_data: ImageCreate, file) -> Optional[dict]:
+        try:
+            file_path = os.path.join(self.upload_dir, file.filename)
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            image = self.image_repository.create(
+                filename=file.filename,
+                file_path=file_path,
+                description=image_data.description,
+                user_id=image_data.user_id
+            )
+            
+            return {
+                "id": image.id,
+                "filename": image.filename,
+                "description": image.description,
+                "created_at": image.created_at
+            }
+        except Exception as e:
+            print(f"Error creating image: {e}")
+            return None
+    
+    def get_image(self, image_id: int) -> Optional[dict]:
+        image = self.image_repository.get_by_id(image_id)
+        if image:
+            return {
+                "id": image.id,
+                "filename": image.filename,
+                "description": image.description,
+                "created_at": image.created_at,
+                "user_id": image.user_id
+            }
+        return None
+    
+    def get_all_images(self) -> List[dict]:
+        images = self.image_repository.get_all()
+        return [
+            {
+                "id": img.id,
+                "filename": img.filename,
+                "description": img.description,
+                "created_at": img.created_at
+            }
+            for img in images
+        ]
+    
+    def update_description(self, image_id: int, description: str) -> Optional[dict]:
+        image = self.image_repository.update(image_id, description=description)
+        if image:
+            return {
+                "id": image.id,
+                "filename": image.filename,
+                "description": image.description,
+                "updated_at": image.updated_at
+            }
+        return None
+    
+    def delete_image(self, image_id: int) -> bool:
+        image = self.image_repository.get_by_id(image_id)
+        if image:
+            if os.path.exists(image.file_path):
+                os.remove(image.file_path)
+            return self.image_repository.delete(image_id)
+        return False
+
+from repositories.user_repository import UserRepository
+from domain.schemas import UserCreate
+from typing import Optional, List
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+class UserService:
+    def __init__(self, user_repository: UserRepository):
+        self.user_repository = user_repository
+    
+    def create_user(self, user_data: UserCreate) -> Optional[dict]:
+        if self.user_repository.get_by_username(user_data.username):
+            return None
+        
+        hashed_password = pwd_context.hash(user_data.password)
+        
+        user = self.user_repository.create(
+            username=user_data.username,
+            email=user_data.email,
+            hashed_password=hashed_password
+        )
+        
+        return {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "created_at": user.created_at
+        }
+    
+    def get_user(self, user_id: int) -> Optional[dict]:
+        user = self.user_repository.get_by_id(user_id)
+        if user:
+            return {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "is_active": user.is_active
+            }
+        return None
+    
+    def get_user_by_username(self, username: str) -> Optional[dict]:
+        user = self.user_repository.get_by_username(username)
+        if user:
+            return {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "hashed_password": user.hashed_password
+            }
+        return None
+    
+    def get_all_users(self) -> List[dict]:
+        users = self.user_repository.get_all()
+        return [
+            {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "is_active": user.is_active
+            }
+            for user in users
+        ]
+
+from services.user_service import UserService
+from domain.schemas import UserLogin
+from typing import Optional
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
+from core.config import settings
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+class AuthService:
+    def __init__(self, user_service: UserService):
+        self.user_service = user_service
+    
+    def authenticate_user(self, login_data: UserLogin) -> Optional[dict]:
+        user = self.user_service.get_user_by_username(login_data.username)
+        if not user:
+            return None
+        
+        if not pwd_context.verify(login_data.password, user["hashed_password"]):
+            return None
+        
+        return user
+    
+    def create_access_token(self, data: dict) -> str:
+        to_encode = data.copy()
+        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        to_encode.update({"exp": expire})
+        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+        return encoded_jwt
+    
+    def verify_token(self, token: str) -> Optional[dict]:
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            return payload
+        except JWTError:
+            return None
